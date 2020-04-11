@@ -34,14 +34,18 @@ function createFile (name, opts) {
   var readers = []
   var writers = []
 
+  console.log('createFile:', name)
+
   return ras({read, write, open, stat, close, destroy})
 
   function read (req) {
+    console.log('read request:', file.name + ' type: ' + req.type + ', offset: '+ req.offset + ', size: ' + req.size)
     const r = readers.pop() || new ReadRequest(readers, file, entry, mutex)
     r.run(req)
   }
 
   function write (req) {
+    console.log('write request:', file.name + ' type: ' + req.type + ', offset: '+ req.offset + ', size: ' + req.size)
     const w = writers.pop() || new WriteRequest(writers, file, entry, mutex)
     w.run(req)
   }
@@ -70,6 +74,7 @@ function createFile (name, opts) {
   }
 
   function open (req) {
+    console.log('Open:', name)
     requestQuota(maxSize, false, function (err, granted) {
       if (err) return onerror(err)
       requestFileSystem(window.PERSISTENT, granted, function (res) {
@@ -78,6 +83,7 @@ function createFile (name, opts) {
           fs.root.getFile(name, {create: true}, function (e) {
             entry = toDestroy = e
             entry.file(function (f) {
+              console.log('File: ', f.name + ', lastModfied: ' + f.lastModified + ', size: ' + f.size)
               file = f
               req.callback(null)
             }, onerror)
@@ -87,6 +93,7 @@ function createFile (name, opts) {
     })
 
     function mkdirp (name, ondone) {
+      console.log('mkdirp:', name)
       if (!name) return ondone()
       fs.root.getDirectory(name, {create: true}, ondone, function () {
         mkdirp(parentFolder(name), function () {
@@ -118,18 +125,23 @@ function WriteRequest (pool, file, entry, mutex) {
   this.mutex = mutex
   this.locked = false
   this.truncating = false
+
+  console.log('WriteRequest:', file.name)
 }
 
 WriteRequest.prototype.makeWriter = function () {
   const self = this
+  console.log('makeWriter')
   this.entry.createWriter(function (writer) {
     self.writer = writer
 
     writer.onwriteend = function () {
+      console.log('write request completed:', self.file.name)
       self.onwrite(null)
     }
 
     writer.onerror = function (err) {
+      console.log('write request error:', self.file.name + ', ' + err)
       self.onwrite(err)
     }
 
@@ -178,6 +190,7 @@ WriteRequest.prototype.run = function (req) {
     return this.makeWriter()
   }
 
+  console.log('WriteRequest run:', this.file.name + ', offset: ' + req.offset + ', size:' + req.size)
   this.writer.seek(req.offset)
   this.writer.write(new Blob([req.data], TYPE))
 }
@@ -214,11 +227,15 @@ function ReadRequest (pool, file, entry, mutex) {
 
   const self = this
 
+  console.log('ReadRequest:', file.name)
+
   this.reader.onerror = function () {
+    console.log('ReadRequest error:', file.name + ', ' + this.error)
     self.onread(this.error, null)
   }
 
   this.reader.onload = function () {
+    console.log('ReadRequest completed:', file.name)
     const buf = Buffer.from(this.result)
     self.onread(null, buf)
   }
@@ -235,11 +252,13 @@ ReadRequest.prototype.onread = function (err, buf) {
 
   if (err && this.retry) {
     this.retry = false
+    console.log('retrying read')
     if (this.lock(this)) this.run(req)
     return
   }
 
   this.req = null
+  console.log('readers push')
   this.pool.push(this)
   this.retry = true
 
@@ -254,6 +273,7 @@ ReadRequest.prototype.onread = function (err, buf) {
 ReadRequest.prototype.run = function (req) {
   const end = req.offset + req.size
   this.req = req
+  console.log('ReadRequest run:', this.file.name + ', type: ' + req.type + ', offset: ' + req.offset + ', size: ' + req.size + ', lastModified: ' + this.file.lastModified + ', file size: ' + this.file.size)
   if (end > this.file.size) return this.onread(new Error('Could not satisfy length'), null)
   this.reader.readAsArrayBuffer(this.file.slice(req.offset, end))
 }
